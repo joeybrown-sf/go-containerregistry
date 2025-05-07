@@ -34,7 +34,7 @@ import (
 
 // NewCmdFlatten creates a new cobra.Command for the flatten subcommand.
 func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
-	var dst, format, destDir string
+	var dst, format string
 
 	flattenCmd := &cobra.Command{
 		Use:   "flatten",
@@ -64,6 +64,10 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 			if format == "oci" {
 				src := args[0]
 				destDir := args[1]
+
+				if src == destDir {
+					log.Fatalf("destructive operation, [source] and [destination] must be different")
+				}
 
 				path, err := layout.FromPath(src)
 				if err != nil {
