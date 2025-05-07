@@ -39,7 +39,23 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 	flattenCmd := &cobra.Command{
 		Use:   "flatten",
 		Short: "Flatten an image's layers into a single layer",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			l, _ := cmd.Flags().GetString("format")
+
+			if l != "" {
+				// If layout flag is set and non-empty, expect 2 args
+				if len(args) != 2 {
+					return fmt.Errorf("when layout flag is set, exactly 2 arguments are required: [source] [destination]")
+				}
+			} else {
+				// If layout flag is not set or empty, expect 1 arg
+				if len(args) != 1 {
+					return fmt.Errorf("exactly 1 argument required: [image]")
+				}
+			}
+
+			return nil
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			// We need direct access to the underlying remote options because crane
 			// doesn't expose great facilities for working with an index (yet).
@@ -47,6 +63,7 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 
 			if format == "oci" {
 				src := args[0]
+				destDir := args[1]
 
 				path, err := layout.FromPath(src)
 				if err != nil {
@@ -99,8 +116,7 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 		},
 	}
 	flattenCmd.Flags().StringVarP(&dst, "tag", "t", "", "New tag to apply to flattened image. If not provided, push by digest to the original image repository.")
-	flattenCmd.Flags().StringVar(&format, "format", "", fmt.Sprintf("Format in which to save images (%q, %q, or %q)", "tarball", "legacy", "oci"))
-	flattenCmd.Flags().StringVar(&destDir, "dst", "", fmt.Sprintf("When using format, specify destination"))
+	flattenCmd.Flags().StringVar(&format, "format", "", fmt.Sprintf("Format in which to save images (%q)", "oci"))
 	return flattenCmd
 }
 
