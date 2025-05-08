@@ -18,6 +18,8 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"log"
+
 	"github.com/google/go-containerregistry/pkg/crane"
 	"github.com/google/go-containerregistry/pkg/logs"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -29,7 +31,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/stream"
 	"github.com/spf13/cobra"
-	"log"
 )
 
 func noop() error { return nil }
