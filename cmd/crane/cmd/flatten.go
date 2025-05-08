@@ -52,11 +52,11 @@ func (w *RemoteWriter) WriteLayer(layer *stream.Layer, o ...remote.Option) error
 
 func (w *RemoteWriter) WriteImage(_ v1.Image) error { return noop() }
 
-type LocalWriter struct {
+type OciWriter struct {
 	dst string
 }
 
-func (w *LocalWriter) WriteImage(img v1.Image) error {
+func (w *OciWriter) WriteImage(img v1.Image) error {
 	p, err := layout.Write(w.dst, empty.Index)
 
 	if err = p.AppendImage(img); err != nil {
@@ -66,7 +66,58 @@ func (w *LocalWriter) WriteImage(img v1.Image) error {
 	return nil
 }
 
-func (w *LocalWriter) WriteLayer(_ *stream.Layer, _ ...remote.Option) error { return noop() }
+func (w *OciWriter) WriteLayer(_ *stream.Layer, _ ...remote.Option) error { return noop() }
+
+type TarballWriter struct {
+	dst string
+}
+
+func (w *TarballWriter) WriteImage(img v1.Image) error {
+	p, err := layout.Write(w.dst, empty.Index)
+
+	if err = p.AppendImage(img); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (w *TarballWriter) WriteLayer(_ *stream.Layer, _ ...remote.Option) error { return noop() }
+
+type LegacyWriter struct {
+	dst string
+}
+
+func (w *LegacyWriter) WriteImage(img v1.Image) error {
+	p, err := layout.Write(w.dst, empty.Index)
+
+	if err = p.AppendImage(img); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (w *LegacyWriter) WriteLayer(_ *stream.Layer, _ ...remote.Option) error { return noop() }
+
+func NewLocalWriter(format, dst string) (ImageWriter, error) {
+	switch format {
+	case "tarball":
+		return &TarballWriter{
+			dst: dst,
+		}, nil
+	case "legacy":
+		return &LegacyWriter{
+			dst: dst,
+		}, nil
+	case "oci":
+		return &OciWriter{
+			dst: dst,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unexpected --format: %q (valid values are: tarball, legacy, and oci)", format)
+	}
+}
 
 // NewCmdFlatten creates a new cobra.Command for the flatten subcommand.
 func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
@@ -83,35 +134,7 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 
 			src := args[0]
 
-			if format == "oci" {
-				if dst == "" {
-					log.Fatalf("--dst is required")
-				}
-
-				if src == dst {
-					log.Fatalf("destructive operation, [source] and [tag] must be different")
-				}
-
-				path, err := layout.FromPath(src)
-				if err != nil {
-					log.Fatalf("parsing %s: %v", src, err)
-				}
-
-				idx, err := path.ImageIndex()
-				if err != nil {
-					log.Fatalf("reading %s: %v", idx, err)
-				}
-
-				writer := &LocalWriter{
-					dst: dst,
-				}
-
-				_, err = flattenIndex(idx, writer, use, o)
-				if err != nil {
-					log.Fatalf("flattening %s: %v", idx, err)
-				}
-				fmt.Fprintln(cmd.OutOrStdout(), dst)
-			} else {
+			if format == "" {
 				// If the new ref isn't provided, write over the original image.
 				// If that ref was provided by digest (e.g., output from
 				// another crane command), then strip that and push the
@@ -153,12 +176,39 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 					log.Fatalf("pushing %s: %v", newRef, err)
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), repo.Digest(digest.String()))
+
+				return
 			}
 
+			if dst == "" {
+				log.Fatalf("--dst is required")
+			}
+
+			if src == dst {
+				log.Fatalf("destructive operation, [source] and [tag] must be different")
+			}
+
+			writer, err := NewLocalWriter(format, dst)
+
+			path, err := layout.FromPath(src)
+			if err != nil {
+				log.Fatalf("parsing %s: %v", src, err)
+			}
+
+			idx, err := path.ImageIndex()
+			if err != nil {
+				log.Fatalf("reading %s: %v", idx, err)
+			}
+
+			_, err = flattenIndex(idx, writer, use, o)
+			if err != nil {
+				log.Fatalf("flattening %s: %v", idx, err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), dst)
 		},
 	}
 	flattenCmd.Flags().StringVarP(&dst, "tag", "t", "", "New tag to apply to flattened image. If not provided, push by digest to the original image repository.")
-	flattenCmd.Flags().StringVar(&format, "format", "tarball", fmt.Sprintf("Format in which to save images (%q, %q, or %q)", "tarball", "legacy", "oci"))
+	flattenCmd.Flags().StringVar(&format, "format", "tarball", fmt.Sprintf("Optional, format in which to save image if referencing oci layout (%q, %q, or %q)", "tarball", "legacy", "oci"))
 	return flattenCmd
 }
 
