@@ -28,7 +28,9 @@ import (
 
 // NewCmdExport creates a new cobra.Command for the export subcommand.
 func NewCmdExport(options *[]crane.Option) *cobra.Command {
-	return &cobra.Command{
+	var ociLayout bool
+
+	cmd := &cobra.Command{
 		Use:   "export IMAGE|- TARBALL|-",
 		Short: "Export filesystem of a container image as a tarball",
 		Example: `  # Write tarball to stdout
@@ -53,7 +55,12 @@ func NewCmdExport(options *[]crane.Option) *cobra.Command {
 			defer f.Close()
 
 			var img v1.Image
-			if src == "-" {
+			if ociLayout {
+				img, err = crane.Read(src, *options...)
+				if err != nil {
+					log.Fatal(err)
+				}
+			} else if src == "-" {
 				tmpfile, err := os.CreateTemp("", "crane")
 				if err != nil {
 					log.Fatal(err)
@@ -90,6 +97,8 @@ func NewCmdExport(options *[]crane.Option) *cobra.Command {
 			return crane.Export(img, f)
 		},
 	}
+	cmd.Flags().BoolVar(&ociLayout, "oci-layout", false, fmt.Sprintf("Optional, format in which to save image if referencing oci layout (%q, %q, or %q)", "tarball", "legacy", "oci"))
+	return cmd
 }
 
 func openFile(s string) (*os.File, error) {
