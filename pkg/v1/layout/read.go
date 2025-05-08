@@ -15,8 +15,11 @@
 package layout
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
 // FromPath reads an OCI image layout at path and constructs a layout.Path.
@@ -29,4 +32,51 @@ func FromPath(path string) (Path, error) {
 	}
 
 	return Path(path), nil
+}
+
+var maxDepth = 10
+
+func walk(idx v1.ImageIndex, platform v1.Platform, depth int) (v1.Image, error) {
+	if depth >= maxDepth {
+		return nil, fmt.Errorf("max depth exceeded: %d", depth)
+	}
+
+	manifest, err := idx.IndexManifest()
+	if err != nil {
+		return nil, fmt.Errorf("reading manifest %s: %w", idx, err)
+	}
+
+	for _, m := range manifest.Manifests {
+		if m.MediaType.IsIndex() {
+			subIdx, err := idx.ImageIndex(m.Digest)
+			if err != nil {
+				return nil, fmt.Errorf("reading index %s: %w", m.Digest, err)
+			}
+			return walk(subIdx, platform, depth+1)
+		} else if m.MediaType.IsImage() {
+			if (*m.Platform).Equals(platform) {
+				img, err := idx.Image(m.Digest)
+				if err != nil {
+					return nil, fmt.Errorf("reading image %s: %w", m.Digest, err)
+				}
+				return img, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("cannot find image for platform %s", platform)
+}
+
+func PlatformImage(path Path, platform v1.Platform) (v1.Image, error) {
+	idx, err := path.ImageIndex()
+	if err != nil {
+		return nil, fmt.Errorf("reading image %s: %w", path, err)
+	}
+
+	depth := 0
+	img, err := walk(idx, platform, depth)
+	if err != nil {
+		return nil, fmt.Errorf("reading image %s: %w", path, err)
+	}
+
+	return img, nil
 }

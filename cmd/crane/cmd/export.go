@@ -22,9 +22,21 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/crane"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/spf13/cobra"
 )
+
+func getPlatform(opts ...crane.Option) v1.Platform {
+	options := crane.GetOptions(opts...)
+	if options.Platform != nil {
+		return *options.Platform
+	}
+	return v1.Platform{
+		Architecture: "amd64",
+		OS:           "linux",
+	}
+}
 
 // NewCmdExport creates a new cobra.Command for the export subcommand.
 func NewCmdExport(options *[]crane.Option) *cobra.Command {
@@ -56,7 +68,12 @@ func NewCmdExport(options *[]crane.Option) *cobra.Command {
 
 			var img v1.Image
 			if ociLayout {
-				img, err = crane.Read(src, *options...)
+				platform := getPlatform(*options...)
+				path, err := layout.FromPath(src)
+				if err != nil {
+					log.Fatalf("parsing %s: %s", src, err)
+				}
+				img, err = layout.PlatformImage(path, platform)
 				if err != nil {
 					log.Fatal(err)
 				}
