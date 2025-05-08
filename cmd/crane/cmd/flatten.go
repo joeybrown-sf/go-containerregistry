@@ -133,79 +133,78 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 			// doesn't expose great facilities for working with an index (yet).
 			o := crane.GetOptions(*options...)
 
-			src := args[0]
-
-			if format == "" {
-				// If the new ref isn't provided, write over the original image.
-				// If that ref was provided by digest (e.g., output from
-				// another crane command), then strip that and push the
-				// mutated image by digest instead.
+			if format != "" {
 				if dst == "" {
-					dst = src
+					log.Fatalf("--dst is required")
+				}
+				src := args[0]
+				if src == dst {
+					log.Fatalf("destructive operation, [source] and [tag] must be different")
 				}
 
-				// Pull image and get config.
-				ref, err := name.ParseReference(src, o.Name...)
+				writer, err := NewLocalWriter(format, dst)
+
+				path, err := layout.FromPath(src)
 				if err != nil {
 					log.Fatalf("parsing %s: %v", src, err)
 				}
-				newRef, err := name.ParseReference(dst, o.Name...)
+
+				idx, err := path.ImageIndex()
 				if err != nil {
-					log.Fatalf("parsing %s: %v", dst, err)
-				}
-				repo := newRef.Context()
-
-				writer := &RemoteWriter{
-					repo: repo,
+					log.Fatalf("reading %s: %v", idx, err)
 				}
 
-				flat, err := flatten(ref, writer, cmd.Parent().Use, o)
+				_, err = flattenIndex(idx, writer, use, o)
 				if err != nil {
-					log.Fatalf("flattening %s: %v", ref, err)
+					log.Fatalf("flattening %s: %v", idx, err)
 				}
-
-				digest, err := flat.Digest()
-				if err != nil {
-					log.Fatalf("digesting new image: %v", err)
-				}
-
-				if _, ok := ref.(name.Digest); ok {
-					newRef = repo.Digest(digest.String())
-				}
-
-				if err := push(flat, newRef, o); err != nil {
-					log.Fatalf("pushing %s: %v", newRef, err)
-				}
-				fmt.Fprintln(cmd.OutOrStdout(), repo.Digest(digest.String()))
-
+				fmt.Fprintln(cmd.OutOrStdout(), dst)
 				return
 			}
 
+			// Pull image and get config.
+			src := args[0]
+
+			// If the new ref isn't provided, write over the original image.
+			// If that ref was provided by digest (e.g., output from
+			// another crane command), then strip that and push the
+			// mutated image by digest instead.
 			if dst == "" {
-				log.Fatalf("--dst is required")
+				dst = src
 			}
 
-			if src == dst {
-				log.Fatalf("destructive operation, [source] and [tag] must be different")
-			}
-
-			writer, err := NewLocalWriter(format, dst)
-
-			path, err := layout.FromPath(src)
+			ref, err := name.ParseReference(src, o.Name...)
 			if err != nil {
 				log.Fatalf("parsing %s: %v", src, err)
 			}
-
-			idx, err := path.ImageIndex()
+			newRef, err := name.ParseReference(dst, o.Name...)
 			if err != nil {
-				log.Fatalf("reading %s: %v", idx, err)
+				log.Fatalf("parsing %s: %v", dst, err)
+			}
+			repo := newRef.Context()
+
+			writer := &RemoteWriter{
+				repo: repo,
 			}
 
-			_, err = flattenIndex(idx, writer, use, o)
+			flat, err := flatten(ref, writer, cmd.Parent().Use, o)
 			if err != nil {
-				log.Fatalf("flattening %s: %v", idx, err)
+				log.Fatalf("flattening %s: %v", ref, err)
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), dst)
+
+			digest, err := flat.Digest()
+			if err != nil {
+				log.Fatalf("digesting new image: %v", err)
+			}
+
+			if _, ok := ref.(name.Digest); ok {
+				newRef = repo.Digest(digest.String())
+			}
+
+			if err := push(flat, newRef, o); err != nil {
+				log.Fatalf("pushing %s: %v", newRef, err)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), repo.Digest(digest.String()))
 		},
 	}
 	flattenCmd.Flags().StringVarP(&dst, "tag", "t", "", "New tag to apply to flattened image. If not provided, push by digest to the original image repository.")
