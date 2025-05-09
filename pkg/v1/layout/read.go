@@ -16,6 +16,7 @@ package layout
 
 import (
 	"fmt"
+	"github.com/google/go-containerregistry/pkg/v1/match"
 	"os"
 	"path/filepath"
 
@@ -36,7 +37,7 @@ func FromPath(path string) (Path, error) {
 
 var maxDepth = 10
 
-func walk(idx v1.ImageIndex, platform v1.Platform, depth int) (v1.Image, error) {
+func walk(idx v1.ImageIndex, matcher match.Matcher, depth int) (v1.Image, error) {
 	if depth >= maxDepth {
 		return nil, fmt.Errorf("max depth exceeded: %d", depth)
 	}
@@ -52,9 +53,9 @@ func walk(idx v1.ImageIndex, platform v1.Platform, depth int) (v1.Image, error) 
 			if err != nil {
 				return nil, fmt.Errorf("reading index %s: %w", m.Digest, err)
 			}
-			return walk(subIdx, platform, depth+1)
+			return walk(subIdx, matcher, depth+1)
 		} else if m.MediaType.IsImage() {
-			if (*m.Platform).Equals(platform) {
+			if matcher(m) {
 				img, err := idx.Image(m.Digest)
 				if err != nil {
 					return nil, fmt.Errorf("reading image %s: %w", m.Digest, err)
@@ -63,17 +64,17 @@ func walk(idx v1.ImageIndex, platform v1.Platform, depth int) (v1.Image, error) 
 			}
 		}
 	}
-	return nil, fmt.Errorf("cannot find image for platform %s", platform)
+	return nil, nil
 }
 
-func PlatformImage(path Path, platform v1.Platform) (v1.Image, error) {
+func FindImage(path Path, matcher match.Matcher) (v1.Image, error) {
 	idx, err := path.ImageIndex()
 	if err != nil {
 		return nil, fmt.Errorf("reading image %s: %w", path, err)
 	}
 
 	depth := 0
-	img, err := walk(idx, platform, depth)
+	img, err := walk(idx, matcher, depth)
 	if err != nil {
 		return nil, fmt.Errorf("reading image %s: %w", path, err)
 	}

@@ -73,9 +73,12 @@ func NewCmdExport(options *[]crane.Option) *cobra.Command {
 				if err != nil {
 					log.Fatalf("parsing %s: %s", src, err)
 				}
-				img, err = layout.PlatformImage(path, platform)
+				img, err = layout.FindImage(path, func(desc v1.Descriptor) bool { return desc.Platform.Equals(platform) })
 				if err != nil {
 					log.Fatal(err)
+				}
+				if img == nil {
+					log.Fatalf("no images found for platform %s: %s", platform, src)
 				}
 			} else if src == "-" {
 				tmpfile, err := os.CreateTemp("", "crane")
