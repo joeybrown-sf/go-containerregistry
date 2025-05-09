@@ -25,6 +25,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/partial"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -32,9 +33,96 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func noop() error { return nil }
+
+type ImageWriter interface {
+	WriteImage(img v1.Image) error
+	WriteLayer(layer *stream.Layer, o ...remote.Option) error
+}
+
+type RemoteWriter struct {
+	repo name.Repository
+}
+
+func (w *RemoteWriter) WriteLayer(layer *stream.Layer, o ...remote.Option) error {
+	if err := remote.WriteLayer(w.repo, layer, o...); err != nil {
+		return fmt.Errorf("uploading layer: %w", err)
+	}
+	return nil
+}
+
+func (w *RemoteWriter) WriteImage(_ v1.Image) error { return noop() }
+
+type OciWriter struct {
+	dst string
+}
+
+func (w *OciWriter) WriteImage(img v1.Image) error {
+	p, err := layout.Write(w.dst, empty.Index)
+
+	if err = p.AppendImage(img); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (w *OciWriter) WriteLayer(_ *stream.Layer, _ ...remote.Option) error { return noop() }
+
+type TarballWriter struct {
+	dst string
+}
+
+func (w *TarballWriter) WriteImage(img v1.Image) error {
+	p, err := layout.Write(w.dst, empty.Index)
+
+	if err = p.AppendImage(img); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (w *TarballWriter) WriteLayer(_ *stream.Layer, _ ...remote.Option) error { return noop() }
+
+type LegacyWriter struct {
+	dst string
+}
+
+func (w *LegacyWriter) WriteImage(img v1.Image) error {
+	p, err := layout.Write(w.dst, empty.Index)
+
+	if err = p.AppendImage(img); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (w *LegacyWriter) WriteLayer(_ *stream.Layer, _ ...remote.Option) error { return noop() }
+
+func NewLocalWriter(format, dst string) (ImageWriter, error) {
+	switch format {
+	case "tarball":
+		return &TarballWriter{
+			dst: dst,
+		}, nil
+	case "legacy":
+		return &LegacyWriter{
+			dst: dst,
+		}, nil
+	case "oci":
+		return &OciWriter{
+			dst: dst,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unexpected --format: %q (valid values are: tarball, legacy, and oci)", format)
+	}
+}
+
 // NewCmdFlatten creates a new cobra.Command for the flatten subcommand.
 func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
-	var dst string
+	var dst, format string
 
 	flattenCmd := &cobra.Command{
 		Use:   "flatten",
@@ -44,6 +132,35 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 			// We need direct access to the underlying remote options because crane
 			// doesn't expose great facilities for working with an index (yet).
 			o := crane.GetOptions(*options...)
+
+			if format != "" {
+				if dst == "" {
+					log.Fatalf("--dst is required")
+				}
+				src := args[0]
+				if src == dst {
+					log.Fatalf("destructive operation, [source] and [tag] must be different")
+				}
+
+				writer, err := NewLocalWriter(format, dst)
+
+				path, err := layout.FromPath(src)
+				if err != nil {
+					log.Fatalf("parsing %s: %v", src, err)
+				}
+
+				idx, err := path.ImageIndex()
+				if err != nil {
+					log.Fatalf("reading %s: %v", idx, err)
+				}
+
+				_, err = flattenIndex(idx, writer, use, o)
+				if err != nil {
+					log.Fatalf("flattening %s: %v", idx, err)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), dst)
+				return
+			}
 
 			// Pull image and get config.
 			src := args[0]
@@ -66,7 +183,11 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 			}
 			repo := newRef.Context()
 
-			flat, err := flatten(ref, repo, cmd.Parent().Use, o)
+			writer := &RemoteWriter{
+				repo: repo,
+			}
+
+			flat, err := flatten(ref, writer, cmd.Parent().Use, o)
 			if err != nil {
 				log.Fatalf("flattening %s: %v", ref, err)
 			}
@@ -87,10 +208,11 @@ func NewCmdFlatten(options *[]crane.Option) *cobra.Command {
 		},
 	}
 	flattenCmd.Flags().StringVarP(&dst, "tag", "t", "", "New tag to apply to flattened image. If not provided, push by digest to the original image repository.")
+	flattenCmd.Flags().StringVar(&format, "format", "tarball", fmt.Sprintf("Optional, format in which to save image if referencing oci layout (%q, %q, or %q)", "tarball", "legacy", "oci"))
 	return flattenCmd
 }
 
-func flatten(ref name.Reference, repo name.Repository, use string, o crane.Options) (partial.Describable, error) {
+func flatten(ref name.Reference, w ImageWriter, use string, o crane.Options) (partial.Describable, error) {
 	desc, err := remote.Get(ref, o.Remote...)
 	if err != nil {
 		return nil, fmt.Errorf("pulling %s: %w", ref, err)
@@ -101,13 +223,13 @@ func flatten(ref name.Reference, repo name.Repository, use string, o crane.Optio
 		if err != nil {
 			return nil, err
 		}
-		return flattenIndex(idx, repo, use, o)
+		return flattenIndex(idx, w, use, o)
 	} else if desc.MediaType.IsImage() {
 		img, err := desc.Image()
 		if err != nil {
 			return nil, err
 		}
-		return flattenImage(img, repo, use, o)
+		return flattenImage(img, w, use, o)
 	}
 
 	return nil, fmt.Errorf("can't flatten %s", desc.MediaType)
@@ -123,7 +245,7 @@ func push(flat partial.Describable, ref name.Reference, o crane.Options) error {
 	return fmt.Errorf("can't push %T", flat)
 }
 
-func flattenIndex(old v1.ImageIndex, repo name.Repository, use string, o crane.Options) (partial.Describable, error) {
+func flattenIndex(old v1.ImageIndex, w ImageWriter, use string, o crane.Options) (partial.Describable, error) {
 	m, err := old.IndexManifest()
 	if err != nil {
 		return nil, err
@@ -151,7 +273,7 @@ func flattenIndex(old v1.ImageIndex, repo name.Repository, use string, o crane.O
 			}
 		}
 
-		flattened, err := flattenChild(m, repo, use, o)
+		flattened, err := flattenChild(m, w, use, o)
 		if err != nil {
 			return nil, err
 		}
@@ -186,18 +308,18 @@ func flattenIndex(old v1.ImageIndex, repo name.Repository, use string, o crane.O
 	return idx, nil
 }
 
-func flattenChild(old partial.Describable, repo name.Repository, use string, o crane.Options) (partial.Describable, error) {
+func flattenChild(old partial.Describable, w ImageWriter, use string, o crane.Options) (partial.Describable, error) {
 	if idx, ok := old.(v1.ImageIndex); ok {
-		return flattenIndex(idx, repo, use, o)
+		return flattenIndex(idx, w, use, o)
 	} else if img, ok := old.(v1.Image); ok {
-		return flattenImage(img, repo, use, o)
+		return flattenImage(img, w, use, o)
 	}
 
 	logs.Warn.Printf("can't flatten %T, skipping", old)
 	return old, nil
 }
 
-func flattenImage(old v1.Image, repo name.Repository, use string, o crane.Options) (partial.Describable, error) {
+func flattenImage(old v1.Image, w ImageWriter, use string, o crane.Options) (partial.Describable, error) {
 	digest, err := old.Digest()
 	if err != nil {
 		return nil, fmt.Errorf("getting old digest: %w", err)
@@ -229,7 +351,7 @@ func flattenImage(old v1.Image, repo name.Repository, use string, o crane.Option
 
 	// TODO: Make compression configurable?
 	layer := stream.NewLayer(mutate.Extract(old), stream.WithCompressionLevel(gzip.BestCompression))
-	if err := remote.WriteLayer(repo, layer, o.Remote...); err != nil {
+	if err := w.WriteLayer(layer, o.Remote...); err != nil {
 		return nil, fmt.Errorf("uploading layer: %w", err)
 	}
 
@@ -247,6 +369,10 @@ func flattenImage(old v1.Image, repo name.Repository, use string, o crane.Option
 	// Retain any annotations from the original image.
 	if len(m.Annotations) != 0 {
 		img = mutate.Annotations(img, m.Annotations).(v1.Image)
+	}
+
+	if err := w.WriteImage(img); err != nil {
+		return nil, fmt.Errorf("writing img: %w", err)
 	}
 
 	return img, nil
